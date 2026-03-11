@@ -91,6 +91,57 @@ if [ -n "$cost" ] && [ "$cost" != "null" ] && [ "$cost" != "0" ]; then
     cost_part=" \033[0;33m💰${cost_fmt}${delta_str} [${day_num}日 💰${daily_fmt}]\033[0m"
 fi
 
+# Rate limit (5h/7d) via Anthropic OAuth API, cached 5 min
+rate_part=""
+cache_file="/tmp/claude_statusline_usage_cache.json"
+cache_ttl=300
+need_refresh=true
+if [ -f "$cache_file" ]; then
+    cache_age=$(( $(date +%s) - $(stat -f %m "$cache_file") ))
+    [ "$cache_age" -lt "$cache_ttl" ] && need_refresh=false
+fi
+if $need_refresh; then
+    token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+    if [ -n "$token" ]; then
+        resp=$(curl -s --max-time 3 "https://api.anthropic.com/api/oauth/usage" \
+            -H "Authorization: Bearer $token" \
+            -H "anthropic-beta: oauth-2025-04-20" \
+            -H "User-Agent: claude-code/2.1.72" 2>/dev/null)
+        if echo "$resp" | jq -e '.five_hour' > /dev/null 2>&1; then
+            echo "$resp" > "$cache_file"
+        fi
+    fi
+fi
+if [ -f "$cache_file" ]; then
+    cache_data=$(cat "$cache_file")
+    h5=$(echo "$cache_data" | jq -r '.five_hour.utilization // empty')
+    d7=$(echo "$cache_data" | jq -r '.seven_day.utilization // empty')
+    h5_reset=$(echo "$cache_data" | jq -r '.five_hour.resets_at // empty')
+    d7_reset=$(echo "$cache_data" | jq -r '.seven_day.resets_at // empty')
+    if [ -n "$h5" ] && [ -n "$d7" ]; then
+        h5_int=$(printf "%.0f" "$h5")
+        d7_int=$(printf "%.0f" "$d7")
+        # Format reset times: 5h show HH:MM, 7d show M/D HH:MM
+        h5_reset_fmt=""
+        d7_reset_fmt=""
+        if [ -n "$h5_reset" ] && [ "$h5_reset" != "null" ]; then
+            h5_reset_fmt=$(python3 -c "from datetime import datetime,timezone,timedelta;dt=datetime.fromisoformat('$h5_reset').astimezone(timezone(timedelta(hours=8)));print(dt.strftime('%H:%M'))" 2>/dev/null)
+        fi
+        if [ -n "$d7_reset" ] && [ "$d7_reset" != "null" ]; then
+            d7_reset_fmt=$(python3 -c "from datetime import datetime,timezone,timedelta;dt=datetime.fromisoformat('$d7_reset').astimezone(timezone(timedelta(hours=8)));print(dt.strftime('%-m/%-d %H:%M'))" 2>/dev/null)
+        fi
+        # Color by utilization
+        for v in h5 d7; do
+            val=$(eval echo \$${v}_int)
+            if [ "$val" -lt 50 ]; then eval "${v}_c=\"\033[0;32m\""
+            elif [ "$val" -lt 70 ]; then eval "${v}_c=\"\033[0;33m\""
+            elif [ "$val" -lt 90 ]; then eval "${v}_c=\"\033[38;5;208m\""
+            else eval "${v}_c=\"\033[0;31m\""; fi
+        done
+        rate_part=" ${h5_c}5h:${h5_int}%${h5_reset_fmt:+@${h5_reset_fmt}}\033[0m ${d7_c}7d:${d7_int}%${d7_reset_fmt:+@${d7_reset_fmt}}\033[0m"
+    fi
+fi
+
 # Output
-printf "\033[1;32m➜\033[0m \033[0;36m %s\033[0m%b%b%b%b" \
-    "$dir_name" "$git_branch" "$ctx_part" "$model_part" "$cost_part"
+printf "\033[1;32m➜\033[0m \033[0;36m %s\033[0m%b%b%b%b%b" \
+    "$dir_name" "$git_branch" "$ctx_part" "$model_part" "$cost_part" "$rate_part"
