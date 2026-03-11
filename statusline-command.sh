@@ -91,19 +91,6 @@ if [ -n "$cost" ] && [ "$cost" != "null" ] && [ "$cost" != "0" ]; then
     cost_part=" \033[0;33m💰${cost_fmt}${delta_str} [${day_num}日 💰${daily_fmt}]\033[0m"
 fi
 
-# Memory usage
-mem_pct=$(vm_stat | awk -v ps=$(sysctl -n vm.pagesize) -v total=$(sysctl -n hw.memsize) '
-/Pages active/ {a=$3+0} /Pages wired/ {w=$4+0} /Pages compressed/ {c=$3+0}
-END { printf "%.0f", (a+w+c)*ps/total*100 }')
-if [ "$mem_pct" -le 50 ]; then
-    mem_color="\033[0;32m"
-elif [ "$mem_pct" -le 75 ]; then
-    mem_color="\033[0;33m"
-else
-    mem_color="\033[0;31m"
-fi
-mem_part=" ${mem_color}MEM ${mem_pct}%\033[0m"
-
 # Output
-printf "\033[1;32m➜\033[0m \033[0;36m %s\033[0m%b%b%b%b%b" \
-    "$dir_name" "$git_branch" "$ctx_part" "$model_part" "$cost_part" "$mem_part"
+printf "\033[1;32m➜\033[0m \033[0;36m %s\033[0m%b%b%b%b" \
+    "$dir_name" "$git_branch" "$ctx_part" "$model_part" "$cost_part"
