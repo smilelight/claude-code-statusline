@@ -6,9 +6,11 @@ input=$(cat)
 
 cwd=$(echo "$input" | jq -r '.workspace.current_dir // .cwd // empty')
 model=$(echo "$input" | jq -r '.model.display_name // empty')
+mode=$(echo "$input" | jq -r '.output_style.name // "default"')
 used=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // empty')
 session_id=$(echo "$input" | jq -r '.session_id // "default"')
+duration_ms=$(echo "$input" | jq -r '.cost.total_duration_ms // empty')
 
 # Current directory basename
 dir_name=$(basename "$cwd")
@@ -53,7 +55,29 @@ fi
 # Model part with robot icon
 model_part=""
 if [ -n "$model" ] && [ "$model" != "null" ]; then
-    model_part=" \033[1;35m󰚩 ${model}\033[0m"
+    model_short=$(echo "$model" | sed 's/ *(.*//')
+    model_part=" \033[1;35m󰚩 ${model_short}\033[0m"
+fi
+
+# Mode part
+mode_part=""
+if [ "$mode" = "plan" ]; then
+    mode_part=" \033[1;36m[Plan]\033[0m"
+elif [ "$mode" = "fast" ]; then
+    mode_part=" \033[1;33m[Fast]\033[0m"
+fi
+
+# Session duration
+duration_part=""
+if [ -n "$duration_ms" ] && [ "$duration_ms" != "null" ]; then
+    total_sec=$(( duration_ms / 1000 ))
+    hours=$(( total_sec / 3600 ))
+    mins=$(( (total_sec % 3600) / 60 ))
+    if [ "$hours" -gt 0 ]; then
+        duration_part=" \033[0;36m${hours}h${mins}m\033[0m"
+    else
+        duration_part=" \033[0;36m${mins}m\033[0m"
+    fi
 fi
 
 # Cost part with delta tracking
@@ -67,7 +91,7 @@ if [ -n "$cost" ] && [ "$cost" != "null" ] && [ "$cost" != "0" ]; then
         prev_cost=$(cat "$cost_file")
         delta=$(printf "%.2f" "$(echo "$cost - $prev_cost" | bc 2>/dev/null)")
         if [ "$delta" != "0.00" ] && [ "$delta" != "0" ]; then
-            delta_str="(⬆︎${delta})"
+            delta_str="(↑ ${delta})"
         fi
     fi
     echo "$cost" > "$cost_file"
@@ -142,6 +166,12 @@ if [ -f "$cache_file" ]; then
     fi
 fi
 
-# Output
+# Output: line 1 = project info + mode, line 2 = cost + rate limit
 printf "\033[1;32m➜\033[0m \033[0;36m %s\033[0m%b%b%b%b%b" \
-    "$dir_name" "$git_branch" "$ctx_part" "$model_part" "$cost_part" "$rate_part"
+    "$dir_name" "$git_branch" "$ctx_part" "$model_part" "$mode_part" "$duration_part"
+line2=""
+[ -n "$cost_part" ] && line2="${cost_part}"
+[ -n "$rate_part" ] && line2="${line2}${rate_part}"
+if [ -n "$line2" ]; then
+    printf "\n%b" "$line2"
+fi
