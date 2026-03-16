@@ -11,6 +11,7 @@ used=$(echo "$input" | jq -r '.context_window.used_percentage // empty')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // empty')
 session_id=$(echo "$input" | jq -r '.session_id // "default"')
 duration_ms=$(echo "$input" | jq -r '.cost.total_duration_ms // empty')
+transcript=$(echo "$input" | jq -r '.transcript_path // empty')
 
 # Current directory basename
 dir_name=$(basename "$cwd")
@@ -166,7 +167,52 @@ if [ -f "$cache_file" ]; then
     fi
 fi
 
-# Output: line 1 = project info + mode, line 2 = cost + rate limit
+# Line 3: randomly show todo or praise from LightNote
+LN_KEY="ln_e1e7e8e1da74999958b4d3481c6c9bb6bd263208ebfa7b55"
+line3=""
+coin=$(( RANDOM % 2 ))
+if [ "$coin" -eq 0 ]; then
+    # Todo
+    todo_resp=$(curl --noproxy '*' -s --max-time 3 "https://note.lightsmile.cn/api/v1/notes?note_type=todo&size=100" \
+        -H "Authorization: Bearer $LN_KEY" 2>/dev/null)
+    if [ -n "$todo_resp" ]; then
+        todo_count=$(echo "$todo_resp" | jq '[.data[] | select(.is_completed == 0)] | length' 2>/dev/null)
+        if [ -n "$todo_count" ] && [ "$todo_count" -gt 0 ]; then
+            rand_idx=$(( RANDOM % todo_count ))
+            todo_text=$(echo "$todo_resp" | jq -r --argjson i "$rand_idx" '[.data[] | select(.is_completed == 0)][$i].content' 2>/dev/null)
+            [ -n "$todo_text" ] && line3="\033[0;35m💡${todo_text}\033[0m"
+        fi
+    fi
+else
+    # Praise (cached 30 min)
+    praise_cache="/tmp/claude_statusline_praise.txt"
+    praise_ttl=1800
+    need_praise=true
+    if [ -f "$praise_cache" ]; then
+        praise_age=$(( $(date +%s) - $(stat -f %m "$praise_cache") ))
+        [ "$praise_age" -lt "$praise_ttl" ] && need_praise=false
+    fi
+    if $need_praise; then
+        # Refresh in background, show stale cache this time
+        (
+            msgs_json='[]'
+            if [ -n "$transcript" ] && [ -f "$transcript" ]; then
+                msgs_json=$(jq -sc '[.[] | select(.type == "user" and .userType == "external" and (.message.content | type) == "string") | .message.content] | .[-5:]' "$transcript" 2>/dev/null || echo '[]')
+            fi
+            praise_resp=$(curl --noproxy '*' -s --max-time 10 "https://note.lightsmile.cn/api/v1/praise" \
+                -H "Authorization: Bearer $LN_KEY" -H "Content-Type: application/json" \
+                -X POST -d "{\"messages\":$msgs_json}" 2>/dev/null)
+            praise_text=$(echo "$praise_resp" | jq -r '.data.praise // empty' 2>/dev/null)
+            [ -n "$praise_text" ] && echo "$praise_text" > "$praise_cache"
+        ) &
+    fi
+    if [ -f "$praise_cache" ]; then
+        praise_text=$(cat "$praise_cache")
+        [ -n "$praise_text" ] && line3="\033[0;33m✨ ${praise_text}\033[0m"
+    fi
+fi
+
+# Output: line 1 = project info + mode, line 2 = cost + rate limit, line 3 = todo/praise
 printf "\033[1;32m➜\033[0m \033[0;36m %s\033[0m%b%b%b%b%b" \
     "$dir_name" "$git_branch" "$ctx_part" "$model_part" "$mode_part" "$duration_part"
 line2=""
@@ -174,4 +220,7 @@ line2=""
 [ -n "$rate_part" ] && line2="${line2}${rate_part}"
 if [ -n "$line2" ]; then
     printf "\n%b" "$line2"
+fi
+if [ -n "$line3" ]; then
+    printf "\n%b" "$line3"
 fi
